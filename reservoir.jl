@@ -7,71 +7,61 @@ mutable struct Neuron <: AbstractNeuron
     membrane_potential::Float64
     threshold::Float64
     reset_potential::Float64
-    decay_factor::Float64
     out_synapses::Vector{AbstractSynapse}
+    in_synapses::Vector{AbstractSynapse}
     last_spike::Float64
+    spike_train::Vector{Int}  # Binary spike train (1 for spike, 0 for no spike)
 end
 
-# Function to initialize Neurons
-function initialize_neurons(num_neurons::Int)
+function initialize_neurons(num_neurons::Int, simulation_length::Int)
     neurons = Vector{Neuron}()
     for _ in 1:num_neurons
         neuron = Neuron(
             0.0,  # Rest voltage
-            0.85,          # Example threshold
-            0.0,    # Rest voltage after spike
-            0.95,       # Example decay factor
-            [],          # No synapses initially
-            -Inf
+            0.5,  # Example threshold
+            0.0,  # Rest voltage after spike
+            [],   # No synapses initially
+            [],   # No synapses initially
+            -Inf, # Initialize as if never spiked
+            zeros(Int, simulation_length)  # Binary spike train
         )
         push!(neurons, neuron)
     end
     return neurons
 end
 
-function update_neuron(current_time, neuron::Neuron, input_current::Float64=0.0; spike_current::Float64=1.0)
-    neuron.membrane_potential += input_current
+function neuron_LIF_update!(neuron::Neuron; current_time::Float64, u_i::Float64, Δt::Float64=10.0)
+    τ_v = 64.0
+    θ_i = neuron.threshold
+    spike_τ = 1.0
 
-    if neuron.membrane_potential > neuron.threshold
+    # Update potential with input current
+    neuron.membrane_potential += (-neuron.membrane_potential / τ_v + u_i) * Δt
+
+    # Check for spikes and reset if necessary
+    if neuron.membrane_potential >= θ_i
         neuron.membrane_potential = neuron.reset_potential
-        for synapse in neuron.out_synapses
-            synapse.post_neuron.membrane_potential += synapse.weight * spike_τ
+        neuron.spike_train[current_time] = 1  # Record spike at the current time index
+        for s in neuron.out_synapses
+            s.begin_syn_current += spike_τ
         end
-        neuron.last_spike = current_time
-        return true
     else
-        neuron.membrane_potential *= neuron.decay_factor
-        return false
+        neuron.spike_train[current_time] = 0  # No spike at the current time index
     end
 end
 
-function update_neurons(t, neurons::Vector{Neuron}, input_currents::Vector{Float64}; spike_τ::Float64=1.0)
-    spikes = Vector{Neuron}()
-
-    for (n, i) in zip(neurons, input_currents)
-        n.membrane_potential += i
-        if n.membrane_potential > n.threshold
-            n.membrane_potential = n.reset_potential
-            for s in n.out_synapses
-                s.post_neuron.membrane_potential += s.weight * spike_τ
-            end
-            n.last_spike = t
-            push!(spikes, n)
-        else
-            n.membrane_potential *= n.decay_factor
-        end
-    end
-    
-    return spikes
-end
+neurons_LIF_update!(neurons::Vector{Neuron}; current_time::Float64, u_i::Vector{Float64}, Δt::Float64=10.0) =
+    neuron_LIF_update!.(neurons; current_time, u_i, Δt)
 
 mutable struct Synapse <: AbstractSynapse
     weight::Float64
     pre_neuron::AbstractNeuron
     post_neuron::AbstractNeuron
-    last_pre_spike::Float64
-    last_post_spike::Float64
-    stdp_param::Float64
+    T_pre::Float64  # Pre-synaptic trace
+    T_post::Float64  # Post-synaptic trace
+    begin_syn_current::Float64
+    end_syn_current::Float64
+    stdp_lr::Float64
 end
 
 # Function to initialize Synapses
@@ -89,134 +79,84 @@ function initialize_synapses(neurons::Vector{Neuron}, num_synapses::Int)
             post_neuron,
             -Inf,          # Initialize with no previous spikes
             -Inf,
+            0.0,
+            0.0,
             0.01               # Example STDP parameter
         )
         push!(synapses, synapse)
         push!(pre_neuron.out_synapses, synapse)
+        push!(post_neuron.in_synapses, synapse)
     end
     return synapses
 end
 
-function update_synapses(t, synapses::Vector{Synapse}, spikes::Vector{Neuron})
-    for synapse in synapses
-        for neuron in spikes
-            if neuron == synapse.pre_neuron
-                synapse.last_pre_spike = t
-            end
-            if neuron == synapse.post_neuron
-                synapse.last_post_spike = t
-            end
-        end
+function synapse_STDP_update!(synapse::Synapse; current_time::Int, Δt::Float64=10.0)
+    A_plus = 0.15
+    A_minus = 0.15
+    τ_plus = 10.0  # ms
+    τ_minus = 10.0  # ms
+    a_plus = 0.1
+    a_minus = 0.1
 
-        dt = synapse.last_post_spike - synapse.last_pre_spike
-        if dt > 0
-            synapse.weight += synapse.stdp_param * exp(-abs(dt))
-        elseif dt < 0
-            synapse.weight -= synapse.stdp_param * exp(-abs(dt))
-        end
+    # Update traces based on the spike train
+    T_pre_decay = exp(-Δt / τ_plus)
+    T_post_decay = exp(-Δt / τ_minus)
+    synapse.T_pre = synapse.T_pre * T_pre_decay + a_plus * synapse.pre_neuron.spike_train[current_time]
+    synapse.T_post = synapse.T_post * T_post_decay + a_minus * synapse.post_neuron.spike_train[current_time]
 
-        # Ensuring the weight stays within reasonable bounds
-        synapse.weight = clamp(synapse.weight, -2.0, 2.0)
+    # STDP weight update based on the last spike times
+    if synapse.pre_neuron.spike_train[current_time] == 1
+        # Potentiation due to pre-synaptic spike
+        synapse.weight += A_plus * synapse.T_pre * Δt
     end
+    if synapse.post_neuron.spike_train[current_time] == 1
+        # Depression due to post-synaptic spike
+        synapse.weight -= A_minus * synapse.T_post * Δt
+    end
+
+    # Clamp weight within reasonable bounds
+    synapse.weight = clamp(synapse.weight, -5.0, 5.0)
 end
+
+synapses_STDP_update!(synapses::Vector{Synapse}; current_time::Int, Δt::Float64=10.0) =
+    synapse_STDP_update!.(synapses; current_time, Δt)
 
 mutable struct Astrocyte <: AbstractAstrocyte
-    modulation_factor::Float64
-    threshold::Float64
-    neurons::Array{AbstractNeuron}
-    synapses::Array{AbstractSynapse}
+    A_astro::Float64
+    τ_astro::Float64
+    w_astro::Float64
+    b_astro::Float64
+    liquid_neurons::Vector{Neuron}
+    input_neurons::Vector{Neuron}
 end
 
-# Function to initialize Astrocytes
-function initialize_astrocytes(neurons::Vector{Neuron}, num_astrocytes::Int)
+function initialize_astrocytes(liquid_neurons::Vector{Neuron}, input_neurons::Vector{Neuron}, num_astrocytes::Int)
     astrocytes = Vector{Astrocyte}()
     for _ in 1:num_astrocytes
         astrocyte = Astrocyte(
-            0.05,      # Example modulation factor
-            5.0,               # Example threshold for activation
-            neurons,             # All neurons for simplicity
-            []                  # No synapses for this example
+            0.0,       # Initial A_astro value
+            1.0,       # τ_astro should be set according to your model specifics
+            1.0,       # w_astro, the weight for the astrocyte's influence
+            0.15,      # b_astro, bias or base level of astrocyte's activity
+            liquid_neurons,
+            input_neurons
         )
         push!(astrocytes, astrocyte)
     end
     return astrocytes
 end
 
-function update_astrocyte(astrocyte::Astrocyte)
-    # Calculate the overall activity in the vicinity of the astrocyte
-    local_activity = sum([neuron.membrane_potential for neuron in astrocyte.neurons])
-
-    # If the activity exceeds a certain threshold, modulate the properties of neurons and synapses
-    if local_activity > astrocyte.threshold
-        for neuron in astrocyte.neurons
-            neuron.threshold += astrocyte.modulation_factor
-        end
-        for synapse in astrocyte.synapses
-            synapse.weight *= (1 + astrocyte.modulation_factor)
-        end
-    end
+function astrocyte_LIM_update!(astrocyte::Astrocyte; current_time::Int, Δt::Float64=10.0)
+    # Calculate the total spikes from liquid and input neurons at the current time
+    liquid_spikes = sum(neuron.spike_train[current_time] for neuron in astrocyte.liquid_neurons)
+    input_spikes = sum(neuron.spike_train[current_time] for neuron in astrocyte.input_neurons)
+    
+    # Compute the change in astrocyte activity
+    dA_astro_dt = (-astrocyte.A_astro / astrocyte.τ_astro) + astrocyte.w_astro * (liquid_spikes - input_spikes) + astrocyte.b_astro
+    
+    # Update the astrocyte's state using Euler integration
+    astrocyte.A_astro += dA_astro_dt * Δt
 end
 
-function simulate_hist!(input_currents::Vector{Float64}, duration::Int64, neurons::Vector{Neuron}, synapses::Vector{Synapse}, astrocytes::Vector{Astrocyte})
-    # Initialize states for neurons and synapses
-    neuron_states = zeros(length(neurons), duration)
-    synapse_states = zeros(length(synapses), duration)
-    astrocyte_states = zeros(length(astrocytes), duration)
-
-    for t in 1:duration
-        spikes = update_neurons(t, neurons, input_currents)
-        neuron_states[:, t] = [neuron.membrane_potential for neuron in neurons]
-
-        update_synapses(t, synapses, spikes)
-        synapse_states[:, t] = [synapse.weight for synapse in synapses]
-
-        for (a, astrocyte) in enumerate(astrocytes)
-            update_astrocyte(astrocyte)
-            astrocyte_states[a, t] = astrocyte.modulation_factor
-        end
-    end
-
-    return neuron_states, synapse_states, astrocyte_states
-end
-
-function simulate!(input_currents::Vector{Float64}, duration::Float64, reservoir_neurons::Vector{Neuron}, reservoir_synapses::Array{Synapse}, reservoir_astrocytes::Array{Astrocyte})
-    for t in 1:duration
-        for (n, neuron) in enumerate(reservoir_neurons)
-            update_neuron(neuron, input_currents[n])
-        end
-
-        for synapse in reservoir_synapses
-            update_synapse(synapse, t)
-        end
-
-        for astrocyte in reservoir_astrocytes
-            update_astrocyte(astrocyte)
-        end
-    end
-end
-
-struct Reservoir
-    neurons::Vector{Neuron}
-    synapses::Array{Synapse}
-    astrocytes::Array{Astrocyte}
-
-    function Reservoir(;num_neurons::Int=10, num_synapses::Int=30, num_astrocytes::Int=2)
-        neurons = initialize_neurons(num_neurons)
-        synapses = initialize_synapses(neurons, num_synapses)
-        astrocytes = initialize_astrocytes(neurons, num_astrocytes)
-        new(neurons, synapses, astrocytes)
-    end
-
-    function Reservoir(neurons::Vector{Neuron}, synapses::Array{Synapse}, astrocytes::Array{Astrocyte})
-        new(neurons, synapses, astrocytes)
-    end
-end
-
-function simulate_hist!(input_currents::Vector{Float64}, duration::Int64, reservoir::Reservoir)
-    simulate_hist!(input_currents, duration, reservoir.neurons, reservoir.synapses, reservoir.astrocytes)
-end
-
-function simulate!(input_currents::Vector{Float64}, duration::Int64, reservoir::Reservoir)
-    simulate!(input_currents, duration, reservoir.neurons, reservoir.synapses, reservoir.astrocytes)
-end
-
+astrocytes_LIM_update!(astrocytes::Vector{Astrocyte}; current_time::Int, Δt::Float64=10.0)=
+    astrocyte_LIM_update!.(astrocytes; current_time, Δt)
