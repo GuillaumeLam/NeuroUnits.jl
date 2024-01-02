@@ -9,6 +9,7 @@ mutable struct Neuron <: AbstractNeuron
     reset_potential::Float64
     decay_factor::Float64
     out_synapses::Vector{AbstractSynapse}
+    last_spike::Float64
 end
 
 # Function to initialize Neurons
@@ -20,26 +21,48 @@ function initialize_neurons(num_neurons::Int)
             0.85,          # Example threshold
             0.0,    # Rest voltage after spike
             0.95,       # Example decay factor
-            []          # No synapses initially
+            [],          # No synapses initially
+            -Inf
         )
         push!(neurons, neuron)
     end
     return neurons
 end
 
-function update_neuron(neuron::Neuron, input_current::Float64=0.0; spike_current::Float64=1.0)
+function update_neuron(current_time, neuron::Neuron, input_current::Float64=0.0; spike_current::Float64=1.0)
     neuron.membrane_potential += input_current
 
     if neuron.membrane_potential > neuron.threshold
         neuron.membrane_potential = neuron.reset_potential
         for synapse in neuron.out_synapses
-            synapse.post_neuron.membrane_potential += synapse.weight * spike_current
+            synapse.post_neuron.membrane_potential += synapse.weight * spike_τ
         end
+        neuron.last_spike = current_time
         return true
     else
         neuron.membrane_potential *= neuron.decay_factor
         return false
     end
+end
+
+function update_neurons(t, neurons::Vector{Neuron}, input_currents::Vector{Float64}; spike_τ::Float64=1.0)
+    spikes = Vector{Neuron}()
+
+    for (n, i) in zip(neurons, input_currents)
+        n.membrane_potential += i
+        if n.membrane_potential > n.threshold
+            n.membrane_potential = n.reset_potential
+            for s in n.out_synapses
+                s.post_neuron.membrane_potential += s.weight * spike_τ
+            end
+            n.last_spike = t
+            push!(spikes, n)
+        else
+            n.membrane_potential *= n.decay_factor
+        end
+    end
+    
+    return spikes
 end
 
 mutable struct Synapse <: AbstractSynapse
@@ -73,26 +96,27 @@ function initialize_synapses(neurons::Vector{Neuron}, num_synapses::Int)
     return synapses
 end
 
-function update_synapse(synapse::Synapse, current_time)
-    current_time = Float64(current_time)
-    # Update the weight of the synapse based on the spike timing
-    if synapse.pre_neuron.membrane_potential > synapse.pre_neuron.threshold
-        synapse.last_pre_spike = current_time
-    end
-    if synapse.post_neuron.membrane_potential > synapse.post_neuron.threshold
-        synapse.last_post_spike = current_time
-    end
+function update_synapses(t, synapses::Vector{Synapse}, spikes::Vector{Neuron})
+    for synapse in synapses
+        for neuron in spikes
+            if neuron == synapse.pre_neuron
+                synapse.last_pre_spike = t
+            end
+            if neuron == synapse.post_neuron
+                synapse.last_post_spike = t
+            end
+        end
 
-    dt = synapse.last_post_spike - synapse.last_pre_spike
-    if dt > 0
-        synapse.weight += synapse.stdp_param * exp(-abs(dt))
-    elseif dt < 0
-        synapse.weight -= synapse.stdp_param * exp(-abs(dt))
+        dt = synapse.last_post_spike - synapse.last_pre_spike
+        if dt > 0
+            synapse.weight += synapse.stdp_param * exp(-abs(dt))
+        elseif dt < 0
+            synapse.weight -= synapse.stdp_param * exp(-abs(dt))
+        end
+
+        # Ensuring the weight stays within reasonable bounds
+        synapse.weight = clamp(synapse.weight, 0.0, 1.0)
     end
-
-    # Ensuring the weight stays within reasonable bounds
-    synapse.weight = clamp(synapse.weight, 0.0, 1.0)
-
 end
 
 mutable struct Astrocyte <: AbstractAstrocyte
@@ -139,17 +163,11 @@ function simulate_hist!(input_currents::Vector{Float64}, duration::Int64, reserv
     astrocyte_states = zeros(length(astrocytes), duration)
 
     for t in 1:duration
-        # Update neurons based on currect state and inputs from synapses
-        for (n, neuron) in enumerate(reservoir_neurons)
-            update_neuron(neuron, input_currents[n])
-            neuron_states[n, t] = neuron.membrane_potential
-        end
+        spikes = update_neurons(t, reservoir_neurons, input_currents)
+        neuron_states[:, t] = [neuron.membrane_potential for neuron in reservoir_neurons]
 
-        # Update synapses based on the spike timings
-        for (s, synapse) in enumerate(reservoir_synapses)
-            update_synapse(synapse, t)
-            synapse_states[s, t] = synapse.weight
-        end
+        update_synapses(t, reservoir_synapses, spikes)
+        synapse_states[:, t] = [synapse.weight for synapse in reservoir_synapses]
 
         # Update astrocytes based on the overall activity
         for (a, astrocyte) in enumerate(reservoir_astrocytes)
