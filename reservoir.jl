@@ -83,7 +83,8 @@ function initialize_synapses(neurons::Vector{Neuron}, num_synapses::Int)
         post_neuron = neurons[rand(1:length(neurons))]
 
         synapse = Synapse(
-            rand(),                # Random initial weight
+            # rand()<0.8 ? rand(0.7:0.1:1.0) : rand(-1.0:0.1:0-0.4),                # Random initial weight
+            rand(),
             pre_neuron,
             post_neuron,
             -Inf,          # Initialize with no previous spikes
@@ -115,7 +116,7 @@ function update_synapses(t, synapses::Vector{Synapse}, spikes::Vector{Neuron})
         end
 
         # Ensuring the weight stays within reasonable bounds
-        synapse.weight = clamp(synapse.weight, 0.0, 1.0)
+        synapse.weight = clamp(synapse.weight, -2.0, 2.0)
     end
 end
 
@@ -156,21 +157,20 @@ function update_astrocyte(astrocyte::Astrocyte)
     end
 end
 
-function simulate_hist!(input_currents::Vector{Float64}, duration::Int64, reservoir_neurons::Vector{Neuron}, reservoir_synapses::Vector{Synapse}, reservoir_astrocytes::Vector{Astrocyte})
+function simulate_hist!(input_currents::Vector{Float64}, duration::Int64, neurons::Vector{Neuron}, synapses::Vector{Synapse}, astrocytes::Vector{Astrocyte})
     # Initialize states for neurons and synapses
     neuron_states = zeros(length(neurons), duration)
     synapse_states = zeros(length(synapses), duration)
     astrocyte_states = zeros(length(astrocytes), duration)
 
     for t in 1:duration
-        spikes = update_neurons(t, reservoir_neurons, input_currents)
-        neuron_states[:, t] = [neuron.membrane_potential for neuron in reservoir_neurons]
+        spikes = update_neurons(t, neurons, input_currents)
+        neuron_states[:, t] = [neuron.membrane_potential for neuron in neurons]
 
-        update_synapses(t, reservoir_synapses, spikes)
-        synapse_states[:, t] = [synapse.weight for synapse in reservoir_synapses]
+        update_synapses(t, synapses, spikes)
+        synapse_states[:, t] = [synapse.weight for synapse in synapses]
 
-        # Update astrocytes based on the overall activity
-        for (a, astrocyte) in enumerate(reservoir_astrocytes)
+        for (a, astrocyte) in enumerate(astrocytes)
             update_astrocyte(astrocyte)
             astrocyte_states[a, t] = astrocyte.modulation_factor
         end
@@ -200,7 +200,7 @@ struct Reservoir
     synapses::Array{Synapse}
     astrocytes::Array{Astrocyte}
 
-    function Reservoir(;num_neurons::Int=10, num_synapses::Int=20, num_astrocytes::Int=2)
+    function Reservoir(;num_neurons::Int=10, num_synapses::Int=30, num_astrocytes::Int=2)
         neurons = initialize_neurons(num_neurons)
         synapses = initialize_synapses(neurons, num_synapses)
         astrocytes = initialize_astrocytes(neurons, num_astrocytes)
