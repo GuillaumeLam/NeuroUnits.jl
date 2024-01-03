@@ -1,72 +1,103 @@
-include("reservoir.jl")
-# include("read_in.jl")
+include("reservoir-components.jl")
+include("read_in.jl")
 # include("read_out.jl")
 
 struct LiquidStateMachine
-    neurons::Vector{Neuron}
-    synapses::Array{Synapse}
-    astrocytes::Array{Astrocyte}
-    read_in_connections::Vector{Float64}  # Vector of neuron weight
-    read_out_connections::Vector{Float64}  # Vector of neuron weight
+    # spk_neurons::Vector{AbstractNeuron}
+    # readin_synapses::Vector{Synapse}
+    liq_neurons::Vector{AbstractNeuron}
+    liq_synapses::Array{Synapse}
+    liq_astrocytes::Array{Astrocyte}
+    # readout_synapses::Vector{Synapse}
+    # readout_neurons::Vector{AbstractNeuron}
 
-    function LiquidStateMachine(;num_neurons::Int=10, num_synapses::Int=30, num_astrocytes::Int=10)
-        neurons = initialize_neurons(num_neurons)
-        synapses = initialize_synapses(neurons, num_synapses)
-        astrocytes = initialize_astrocytes(neurons, synapses, num_astrocytes)
-        read_in_connections = [rand()>0.8 ? rand() : 0.0 for _ in 1:length(neurons)]
-        read_out_connections = [rand()>0.8 ? rand() : 0.0 for _ in 1:length(neurons)]
+    reservoir_hist::Dict{String, Matrix{Float64}}
 
-        new(neurons, synapses, astrocytes, read_in_connections, read_out_connections)
+    u_i_t_stim::Function
+    u_i_t_rest::Function
+
+    function LiquidStateMachine(;num_spk_neurons::Int=85, num_liq_neurons::Int=1000, num_liq_synapses::Int=3000, num_liq_astrocytes::Int=20, signal_gain::Float64=20.0)
+        # freq = 10
+
+        u_i_t_stim = factory(0.95, num_spk_neurons, signal_gain)
+        u_i_t_rest = factory(0.05, num_spk_neurons, signal_gain)
+
+        reservoir_hist = Dict(
+            "neuron_membrane_hist" => Matrix{Float64}(undef, num_liq_neurons, 0),
+            "synapse_weight_hist" => Matrix{Float64}(undef, num_liq_synapses, 0),
+            "astrocyte_A_hist" => Matrix{Float64}(undef, num_liq_astrocytes, 0),
+        )
+
+        # Initialize the neurons, synapses, and astrocytes
+        liq_neurons = initialize_neurons(num_liq_neurons)
+        liq_synapses = initialize_synapses(num_liq_synapses, liq_neurons)
+        liq_astrocytes = initialize_astrocytes(num_liq_astrocytes, liq_neurons)
+
+        new(
+            liq_neurons, 
+            liq_synapses, 
+            liq_astrocytes, 
+            reservoir_hist,
+            u_i_t_stim,
+            u_i_t_rest
+        )
     end
 end
 
-function simulate_hist!(lsm::LiquidStateMachine, input::Vector{Float64}; stim_timesteps::Int=100, rest_timesteps::Int=50)
-    neuron_states, synapse_states, astrocyte_states = simulate_hist!(input, stim_timesteps, lsm.neurons, lsm.synapses, lsm.astrocytes)
-    neuron_statesp, synapse_statesp, astrocyte_statesp = simulate_hist!(zeros(length(lsm.neurons)), rest_timesteps, lsm.neurons, lsm.synapses, lsm.astrocytes)
-    return hcat(neuron_states, neuron_statesp), hcat(synapse_states, synapse_statesp), hcat(astrocyte_states, astrocyte_statesp)
+function simulate!(lsm::LiquidStateMachine; u_i_f=nothing, duration::Int=100, Δt::Float64=1.0)
+	for current_time in 1:duration
+		
+        if isnothing(u_i_f)
+            u_i = lsm.u_i_t_rest(current_time)
+        else
+            u_i = u_i_f(current_time)
+        end
+        # when read_in is implemented, u_i_f => u_i will be the stimulus passed to readin
+
+		neurons_LIF_update!(lsm.liq_neurons, current_time, u_i, Δt)
+		synapses_STDP_update!(lsm.liq_synapses, current_time, Δt)
+		astrocytes_LIM_update!(lsm.liq_astrocytes, current_time, u_i, Δt)
+	end
 end
 
-function simulate!(lsm::LiquidStateMachine, input::Vector{Float64}; stim_timesteps::Int=100, rest_timesteps::Int=50)
-    simulate!(input, stim_timesteps, lsm.neurons, lsm.synapses, lsm.astrocytes)
-    simulate!(zeros(length(lsm.neurons)), rest_timesteps, lsm.neurons, lsm.synapses, lsm.astrocytes)
-end
+function simulate_w_hist!(lsm::LiquidStateMachine; u_i_f=nothing, duration::Int=100, Δt::Float64=1.0)
+	neuron_membrane_hist = Matrix{Float64}(undef, length(lsm.liq_neurons), duration)
+	synapse_weight_hist = Matrix{Float64}(undef, length(lsm.liq_synapses), duration)
+	astrocyte_A_hist = Matrix{Float64}(undef, length(lsm.liq_astrocytes), duration)
 
-function simulate_hist!(input_currents::Vector{Float64}, duration::Int64, neurons::Vector{Neuron}, synapses::Vector{Synapse}, astrocytes::Vector{Astrocyte})
-    # Initialize states for neurons and synapses
-    neuron_states = zeros(length(neurons), duration)
-    synapse_states = zeros(length(synapses), duration)
-    astrocyte_states = zeros(length(astrocytes), duration)
+	for current_time in 1:duration
+		
+		println("current_time: ", current_time)
 
-    for t in 1:duration
-        spikes = update_neurons(t, neurons, input_currents)
-        neuron_states[:, t] = [neuron.membrane_potential for neuron in neurons]
-
-        update_synapses(t, synapses, spikes)
-        synapse_states[:, t] = [synapse.weight for synapse in synapses]
-
-        for (a, astrocyte) in enumerate(astrocytes)
-            update_astrocyte(astrocyte)
-            astrocyte_states[a, t] = astrocyte.local_activity
-        end
-    end
-
-    return neuron_states, synapse_states, astrocyte_states
-end
-
-function simulate!(input_currents::Vector{Float64}, duration::Float64, reservoir_neurons::Vector{Neuron}, reservoir_synapses::Array{Synapse}, reservoir_astrocytes::Array{Astrocyte})
-    for t in 1:duration
-        for (n, neuron) in enumerate(reservoir_neurons)
-            update_neuron(neuron, input_currents[n])
+		if isnothing(u_i_f)
+            u_i = lsm.u_i_t_rest(current_time)
+        else
+            u_i = u_i_f(current_time)
         end
 
-        for synapse in reservoir_synapses
-            update_synapse(synapse, t)
-        end
+		neurons_LIF_update!(lsm.liq_neurons, current_time, u_i, Δt)
+		synapses_STDP_update!(lsm.liq_synapses, current_time, Δt)
+		astrocytes_LIM_update!(lsm.liq_astrocytes, current_time, u_i, Δt)
+	
+		# Record neuron membrane potentials
+		for (i, neuron) in enumerate(lsm.liq_neurons)
+			neuron_membrane_hist[i, current_time] = neuron.membrane_potential
+		end
+		# Record synapse weights
+		for (i, synapse) in enumerate(lsm.liq_synapses)
+			synapse_weight_hist[i, current_time] = synapse.weight
+		end
+		# Record astrocyte A_astro
+		for (i, astrocyte) in enumerate(lsm.liq_astrocytes)
+			astrocyte_A_hist[i, current_time] = astrocyte.A_astro
+		end
+	end
 
-        for astrocyte in reservoir_astrocytes
-            update_astrocyte(astrocyte)
-        end
-    end
+	lsm.reservoir_hist["neuron_membrane_hist"] = hcat(lsm.reservoir_hist["neuron_membrane_hist"], neuron_membrane_hist)
+	lsm.reservoir_hist["synapse_weight_hist"] = hcat(lsm.reservoir_hist["synapse_weight_hist"], synapse_weight_hist)
+	lsm.reservoir_hist["astrocyte_A_hist"] = hcat(lsm.reservoir_hist["astrocyte_A_hist"], astrocyte_A_hist)
+
+    return lsm.reservoir_hist
 end
 
 function (lsm::LiquidStateMachine)(input::Vector{Float64})
@@ -80,3 +111,6 @@ function (lsm::LiquidStateMachine)(input::Vector{Float64})
     return h2
 end
 
+function Base.show(io::IO, ::MIME"text/plain", a::LiquidStateMachine)
+    println(io, "Liquid State Machine assembled!!!!")
+end

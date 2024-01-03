@@ -6,7 +6,7 @@ abstract type AbstractSynapse end
 abstract type AbstractAstrocyte end
 
 # Neuron struct
-mutable struct Neuron <: AbstractNeuron
+mutable struct LIFNeuron <: AbstractNeuron
 	membrane_potential::Float64
 	threshold::Float64
 	reset_potential::Float64
@@ -19,11 +19,11 @@ mutable struct Neuron <: AbstractNeuron
 end
 
 function initialize_neurons(num_neurons::Int; simulation_length::Int=100)
-	neurons = Vector{Neuron}()
+	neurons = Vector{AbstractNeuron}()
 	for _ in 1:num_neurons
 		type = rand()<0.8 ? "excitatory" : "inhibitory"
 
-		neuron = Neuron(
+		neuron = LIFNeuron(
 			0.0,  # Rest voltage
 			5.0,  # Example threshold
 			-0.7,  # Rest voltage after spike
@@ -39,6 +39,42 @@ function initialize_neurons(num_neurons::Int; simulation_length::Int=100)
 	return neurons
 end
 
+# LIF Neuron update function
+function neuron_LIF_update!(neuron::AbstractNeuron, current_time::Int, u_i::Float64, Δt::Float64)
+	τ_v = 64.0
+	θ_i = neuron.threshold
+	absolute_refractory_period = 2.0  # Absolute refractory period duration in milliseconds
+
+    # Check if the neuron is in the refractory period
+    if !(current_time - neuron.last_spike < absolute_refractory_period)
+		# Check for spikes and reset if necessary
+		if neuron.membrane_potential >= θ_i
+			neuron.membrane_potential = neuron.reset_potential
+			neuron.spike_train[current_time] = 1  # Record spike at the current time index
+			neuron.last_spike = current_time
+		else
+			# Update the membrane potential using Euler integration
+			neuron.membrane_potential += (-neuron.membrane_potential + u_i) * (Δt / τ_v)
+		end
+	end
+end
+
+# LIF update function for all neurons
+function neurons_LIF_update!(neurons::Vector{AbstractNeuron}, current_time::Int, u_i::Vector{Float64}, Δt::Float64)
+	u_i = u_i |> x -> [x; zeros(length(neurons) - length(x))]
+	
+	for (neuron, current) in zip(neurons, u_i)
+		neuron_LIF_update!(neuron, current_time, current, Δt)
+	end
+end
+
+mutable struct SpikingNeuron <: AbstractNeuron
+	spike_τ::Float64
+	out_synapses::Vector{AbstractSynapse}  # Specify the concrete type for clarity
+	last_spike::Float64
+	spike_train::Vector{Int}       # Binary spike train (1 for spike, 0 for no spike)
+end
+
 # Synapse struct
 mutable struct Synapse <: AbstractSynapse
 	weight::Float64
@@ -52,7 +88,7 @@ mutable struct Synapse <: AbstractSynapse
 end
 
 # Function to initialize Synapses
-function initialize_synapses(num_synapses::Int, neurons::Vector{Neuron})
+function initialize_synapses(num_synapses::Int, neurons::Vector{AbstractNeuron})
 	synapses = Vector{Synapse}()
 	for _ in 1:num_synapses
 
@@ -87,7 +123,7 @@ mutable struct Astrocyte <: AbstractAstrocyte
 	Γ_astro::Float64
 	liquid_neurons::Vector{AbstractNeuron}
 end
-function initialize_astrocytes(num_astrocytes::Int, liquid_neurons::Vector{Neuron})
+function initialize_astrocytes(num_astrocytes::Int, liquid_neurons::Vector{AbstractNeuron})
 	astrocytes = Vector{Astrocyte}()
 	for _ in 1:num_astrocytes
 		modulated_neurons = rand(liquid_neurons, 100)
@@ -107,35 +143,6 @@ function initialize_astrocytes(num_astrocytes::Int, liquid_neurons::Vector{Neuro
 		end
 	end
 	return astrocytes
-end
-
-# LIF Neuron update function
-function neuron_LIF_update!(neuron::Neuron, current_time::Int, u_i::Float64, Δt::Float64)
-	τ_v = 64.0
-	θ_i = neuron.threshold
-	absolute_refractory_period = 2.0  # Absolute refractory period duration in milliseconds
-
-    # Check if the neuron is in the refractory period
-    if !(current_time - neuron.last_spike < absolute_refractory_period)
-		# Check for spikes and reset if necessary
-		if neuron.membrane_potential >= θ_i
-			neuron.membrane_potential = neuron.reset_potential
-			neuron.spike_train[current_time] = 1  # Record spike at the current time index
-			neuron.last_spike = current_time
-		else
-			# Update the membrane potential using Euler integration
-			neuron.membrane_potential += (-neuron.membrane_potential + u_i) * (Δt / τ_v)
-		end
-	end
-end
-
-# LIF update function for all neurons
-function neurons_LIF_update!(neurons::Vector{Neuron}, current_time::Int, u_i::Vector{Float64}, Δt::Float64)
-	u_i = u_i |> x -> [x; zeros(length(neurons) - length(x))]
-	
-	for (neuron, current) in zip(neurons, u_i)
-		neuron_LIF_update!(neuron, current_time, current, Δt)
-	end
 end
 
 # STDP Synapse update function
@@ -225,32 +232,7 @@ function astrocytes_LIM_update!(astrocytes::Vector{Astrocyte}, current_time::Int
 	println("Astrocyte activity; mean liq-in spike diff: ", mean(s))
 end
 
-function simulate!(u_i_f::Function, neurons::Vector{Neuron}, synapses::Vector{Synapse}, astrocytes::Vector{Astrocyte}; duration::Int=100, Δt::Float64=1.0)
-	for current_time in 1:duration
-		# TODO: 
-		# 	Technical:
-		#	- 1. Add input adapter, spiking neurons, ouptut point neuron, & inhib neurons/synapses
-		#	- 2. Connect spiking neurons (input from input adapter) with synapses to liquid neurons
-		#	- 3. Connect liquid neurons with synapses to readout neurons
-		# 	Practical:
-		# 	- 0. Isolate mutable parts from immutable structures (speed up => simpler job for parallelism)
-		# 	- 1. Add multi-processing
-		#
-		
-		u_i = u_i_f(current_time)
-
-		# Update neurons with the LIF model
-		neurons_LIF_update!(neurons, current_time, u_i, Δt)
-		
-		# Update synapses with the STDP model
-		synapses_STDP_update!(synapses, current_time, Δt)
-		
-		# Update astrocytes with the LIM model
-		astrocytes_LIM_update!(astrocytes, current_time, u_i, Δt)
-	end
-end
-
-function Base.show(io::IO, ::MIME"text/plain", n::Vector{Neuron})
+function Base.show(io::IO, ::MIME"text/plain", n::Vector{AbstractNeuron})
     println(io, "Neurons.")
 end
 
@@ -260,50 +242,4 @@ end
 
 function Base.show(io::IO, ::MIME"text/plain", a::Vector{Astrocyte})
 	println(io, "Astrocytes!!")
-end
-
-function simulate_w_hist!(hist_dict::Dict, u_i_f::Function, neurons::Vector{Neuron}, synapses::Vector{Synapse}, astrocytes::Vector{Astrocyte}; duration::Int=100, Δt::Float64=1.0)
-	neuron_membrane_hist = Matrix{Float64}(undef, length(neurons), duration)
-	synapse_weight_hist = Matrix{Float64}(undef, length(synapses), duration)
-	astrocyte_A_hist = Matrix{Float64}(undef, length(astrocytes), duration)
-
-	for current_time in 1:duration
-		# TODO: 
-		# 	Technical:
-		#	- 1. Add input adapter, spiking neurons, ouptut point neuron, & inhib neurons/synapses
-		#	- 2. Connect spiking neurons (input from input adapter) with synapses to liquid neurons
-		#	- 3. Connect liquid neurons with synapses to readout neurons
-		# 	Practical:
-		# 	- 0. Isolate mutable parts from immutable structures (speed up => simpler job for parallelism)
-		# 	- 1. Add multi-processing
-		#
-		
-		println("current_time: ", current_time)
-
-		u_i = u_i_f(current_time)
-
-		# Update neurons with the LIF model
-		neurons_LIF_update!(neurons, current_time, u_i, Δt)
-		# Update synapses with the STDP model
-		synapses_STDP_update!(synapses, current_time, Δt)
-		# Update astrocytes with the LIM model
-		astrocytes_LIM_update!(astrocytes, current_time, u_i, Δt)
-	
-		# Record neuron membrane potentials
-		for (i, neuron) in enumerate(neurons)
-			neuron_membrane_hist[i, current_time] = neuron.membrane_potential
-		end
-		# Record synapse weights
-		for (i, synapse) in enumerate(synapses)
-			synapse_weight_hist[i, current_time] = synapse.weight
-		end
-		# Record astrocyte A_astro
-		for (i, astrocyte) in enumerate(astrocytes)
-			astrocyte_A_hist[i, current_time] = astrocyte.A_astro
-		end
-	end
-
-	hist_dict["neuron_membrane_hist"] = hcat(hist_dict["neuron_membrane_hist"], neuron_membrane_hist)
-	hist_dict["synapse_weight_hist"] = hcat(hist_dict["synapse_weight_hist"], synapse_weight_hist)
-	hist_dict["astrocyte_A_hist"] = hcat(hist_dict["astrocyte_A_hist"], astrocyte_A_hist)
 end
