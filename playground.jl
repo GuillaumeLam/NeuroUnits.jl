@@ -12,10 +12,11 @@ Pkg.activate("./LSM.jl")
 # 	- 0. Isolate mutable parts from immutable structures (speed up => simpler job for parallelism)
 # 	- 1. Add multi-processing
 
-include("lsm.jl")
 include("graphics.jl")
+include("lsm.jl")
 
 @time lsm = LiquidStateMachine()
+@time reservoir_hist = simulate_w_hist!(lsm, u_i_f=lsm.u_i_t_stim)
 @time reservoir_hist = simulate_w_hist!(lsm)
 
 @time create_plots(

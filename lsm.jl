@@ -16,7 +16,7 @@ struct LiquidStateMachine
     u_i_t_stim::Function
     u_i_t_rest::Function
 
-    function LiquidStateMachine(;num_spk_neurons::Int=85, num_liq_neurons::Int=1000, num_liq_synapses::Int=3000, num_liq_astrocytes::Int=20, signal_gain::Float64=20.0)
+    function LiquidStateMachine(;num_spk_neurons::Int=150, num_liq_neurons::Int=1000, num_liq_synapses::Int=2500, num_liq_astrocytes::Int=1500, signal_gain::Float64=7.0)
         # freq = 10
 
         u_i_t_stim = factory(0.95, num_spk_neurons, signal_gain)
@@ -31,7 +31,7 @@ struct LiquidStateMachine
         # Initialize the neurons, synapses, and astrocytes
         liq_neurons = initialize_neurons(num_liq_neurons)
         liq_synapses = initialize_synapses(num_liq_synapses, liq_neurons)
-        liq_astrocytes = initialize_astrocytes(num_liq_astrocytes, liq_neurons)
+        liq_astrocytes = initialize_astrocytes(num_liq_astrocytes, liq_synapses)
 
         new(
             liq_neurons, 

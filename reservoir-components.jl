@@ -15,24 +15,22 @@ mutable struct LIFNeuron <: AbstractNeuron
 	in_synapses::Vector{AbstractSynapse}   # Specify the concrete type for clarity
 	last_spike::Float64
 	spike_train::Vector{Int}       # Binary spike train (1 for spike, 0 for no spike)
-	linked_astrocytes::Vector{AbstractAstrocyte}
 end
 
 function initialize_neurons(num_neurons::Int; simulation_length::Int=100)
-	neurons = Vector{AbstractNeuron}()
+	neurons = Vector{LIFNeuron}()
 	for _ in 1:num_neurons
 		type = rand()<0.8 ? "excitatory" : "inhibitory"
 
 		neuron = LIFNeuron(
 			0.0,  # Rest voltage
 			5.0,  # Example threshold
-			-0.7,  # Rest voltage after spike
+			-0.3,  # Rest voltage after spike
 			type == "excitatory" ? 1.7 : -1.7,  # Spike amplitude
 			[],   # No synapses initially
 			[],   # No synapses initially
 			-Inf, # Initialize as if never spiked
-			zeros(Int, simulation_length),  # Binary spike train
-			[]   # No astrocytes initially
+			zeros(Int, simulation_length)  # Binary spike train
 		)
 		push!(neurons, neuron)
 	end
@@ -40,7 +38,7 @@ function initialize_neurons(num_neurons::Int; simulation_length::Int=100)
 end
 
 # LIF Neuron update function
-function neuron_LIF_update!(neuron::AbstractNeuron, current_time::Int, u_i::Float64, Δt::Float64)
+function neuron_LIF_update!(neuron::N, current_time::Int, u_i::Float64, Δt::Float64) where {N <: AbstractNeuron}
 	τ_v = 64.0
 	θ_i = neuron.threshold
 	absolute_refractory_period = 2.0  # Absolute refractory period duration in milliseconds
@@ -60,7 +58,7 @@ function neuron_LIF_update!(neuron::AbstractNeuron, current_time::Int, u_i::Floa
 end
 
 # LIF update function for all neurons
-function neurons_LIF_update!(neurons::Vector{AbstractNeuron}, current_time::Int, u_i::Vector{Float64}, Δt::Float64)
+function neurons_LIF_update!(neurons::Vector{N}, current_time::Int, u_i::Vector{Float64}, Δt::Float64) where {N <: AbstractNeuron}
 	u_i = u_i |> x -> [x; zeros(length(neurons) - length(x))]
 	
 	for (neuron, current) in zip(neurons, u_i)
@@ -68,12 +66,12 @@ function neurons_LIF_update!(neurons::Vector{AbstractNeuron}, current_time::Int,
 	end
 end
 
-mutable struct SpikingNeuron <: AbstractNeuron
-	spike_τ::Float64
-	out_synapses::Vector{AbstractSynapse}  # Specify the concrete type for clarity
-	last_spike::Float64
-	spike_train::Vector{Int}       # Binary spike train (1 for spike, 0 for no spike)
-end
+# mutable struct SpikingNeuron <: AbstractNeuron
+# 	spike_τ::Float64
+# 	out_synapses::Vector{AbstractSynapse}  # Specify the concrete type for clarity
+# 	last_spike::Float64
+# 	spike_train::Vector{Int}       # Binary spike train (1 for spike, 0 for no spike)
+# end
 
 # Synapse struct
 mutable struct Synapse <: AbstractSynapse
@@ -85,10 +83,12 @@ mutable struct Synapse <: AbstractSynapse
 	T_post::Float64              # Post-synaptic trace
 	delay_const::Float64
 	delay_count::Float64
+	spike_τ::Float64
+	linked_astrocytes::Vector{AbstractAstrocyte}
 end
 
 # Function to initialize Synapses
-function initialize_synapses(num_synapses::Int, neurons::Vector{AbstractNeuron})
+function initialize_synapses(num_synapses::Int, neurons::Vector{N}) where {N <: AbstractNeuron}
 	synapses = Vector{Synapse}()
 	for _ in 1:num_synapses
 
@@ -105,7 +105,9 @@ function initialize_synapses(num_synapses::Int, neurons::Vector{AbstractNeuron})
 			0.0,
 			0.0,
 			3.0,
-			0.0
+			0.0,
+			false,
+			[]
 		)
 		push!(synapses, synapse)
 		push!(pre_neuron.out_synapses, synapse)
@@ -114,42 +116,12 @@ function initialize_synapses(num_synapses::Int, neurons::Vector{AbstractNeuron})
 	return synapses
 end
 
-# Astrocyte struct
-mutable struct Astrocyte <: AbstractAstrocyte
-	A_astro::Float64
-	τ_astro::Float64
-	w_astro::Float64
-	b_astro::Float64
-	Γ_astro::Float64
-	liquid_neurons::Vector{AbstractNeuron}
-end
-function initialize_astrocytes(num_astrocytes::Int, liquid_neurons::Vector{AbstractNeuron})
-	astrocytes = Vector{Astrocyte}()
-	for _ in 1:num_astrocytes
-		modulated_neurons = rand(liquid_neurons, 100)
-		# modulated_neurons = liquid_neurons
-
-		astrocyte = Astrocyte(
-			0.15,      	# Initial A_astro value
-			10.0,     	# τ_astro should be set according to your model specifics
-			7.5e-3,       # w_astro, the weight for the astrocyte's influence
-			0.01,      	# b_astro, bias or base level of astrocyte's activity
-			0.9, 		# Γ_astro, the gain for the astrocyte's influence
-			modulated_neurons
-		)
-		push!(astrocytes, astrocyte)
-		for n in modulated_neurons
-			push!(n.linked_astrocytes, astrocyte)
-		end
-	end
-	return astrocytes
-end
-
 # STDP Synapse update function
 function synapse_STDP_update!(synapse::Synapse, current_time::Int, Δt::Float64)
-	if synapse.pre_neuron.linked_astrocytes != []
-		# A_minus = synapse.pre_neuron.linked_astrocytes[1].A_astro
-		A_minus = mean([astrocyte.A_astro for astrocyte in synapse.pre_neuron.linked_astrocytes])
+	synapse.spike_τ = 0.0
+	
+	if synapse.linked_astrocytes != []
+		A_minus = mean([astrocyte.A_astro for astrocyte in synapse.linked_astrocytes])
 	else
 		A_minus = 0.15
 	end
@@ -170,6 +142,7 @@ function synapse_STDP_update!(synapse::Synapse, current_time::Int, Δt::Float64)
 		synapse.delay_count -= 1.0
 		if synapse.delay_count == 0 && !(current_time - synapse.post_neuron.last_spike < 2)
 			synapse.post_neuron.membrane_potential += synapse.weight * synapse.pre_neuron.spike_τ
+			synapse.spike_τ = synapse.weight * synapse.pre_neuron.spike_τ
 		end
 	end
 
@@ -205,11 +178,43 @@ function synapses_STDP_update!(synapses::Vector{Synapse}, current_time::Int, Δt
 	end
 end
 
+
+# Astrocyte struct
+mutable struct Astrocyte <: AbstractAstrocyte
+	A_astro::Float64
+	τ_astro::Float64
+	w_astro::Float64
+	b_astro::Float64
+	Γ_astro::Float64
+	liquid_synapses::Vector{AbstractSynapse}
+end
+function initialize_astrocytes(num_astrocytes::Int, liquid_synapses::Vector{S}) where {S <: AbstractSynapse}
+	astrocytes = Vector{Astrocyte}()
+	for _ in 1:num_astrocytes
+		modulated_synapses = rand(liquid_synapses, 100)
+		# modulated_neurons = liquid_neurons
+
+		astrocyte = Astrocyte(
+			0.15,      	# Initial A_astro value
+			1000.0,     	# τ_astro should be set according to your model specifics
+			7.5e-3,       # w_astro, the weight for the astrocyte's influence
+			0.01,      	# b_astro, bias or base level of astrocyte's activity
+			0.9, 		# Γ_astro, the gain for the astrocyte's influence
+			modulated_synapses
+		)
+		push!(astrocytes, astrocyte)
+		for s in modulated_synapses
+			push!(s.linked_astrocytes, astrocyte)
+		end
+	end
+	return astrocytes
+end
+
 # Astrocyte LIM model update function
 function astrocyte_LIM_update!(astrocyte::Astrocyte, current_time::Int, u_i::Vector{Float64}, Δt::Float64)
 	# Calculate the total spikes from liquid and input neurons at the current time
-	liquid_spikes = sum(neuron.spike_train[current_time] for neuron in astrocyte.liquid_neurons)
-	input_spikes = sum(u_i .!= 0.0)
+	liquid_spikes = sum(synapse.spike_τ for synapse in astrocyte.liquid_synapses)
+	input_spikes = sum(u_i)
 	
 	# Compute the change in astrocyte activity
 	dA_astro_dt = (-astrocyte.A_astro * astrocyte.Γ_astro + astrocyte.w_astro * (liquid_spikes - input_spikes) + astrocyte.b_astro) / astrocyte.τ_astro
@@ -221,13 +226,15 @@ end
 # LIM update function for all astrocytes
 function astrocytes_LIM_update!(astrocytes::Vector{Astrocyte}, current_time::Int, u_i::Vector{Float64}, Δt::Float64)
 	s = []
+	println("Sum of A_astro before: ", mean([astrocyte.A_astro for astrocyte in astrocytes]))
 	for astrocyte in astrocytes
-		liquid_spikes = sum(neuron.spike_train[current_time] for neuron in astrocyte.liquid_neurons)
-		input_spikes = sum(u_i .!= 0.0)
+		liquid_spikes = sum(synapse.spike_τ for synapse in astrocyte.liquid_synapses)
+		input_spikes = sum(u_i)
 		push!(s, liquid_spikes - input_spikes)
 
 		astrocyte_LIM_update!(astrocyte, current_time, u_i, Δt)
 	end
+	println("Sum of A_astro after: ", mean([astrocyte.A_astro for astrocyte in astrocytes]))
 
 	println("Astrocyte activity; mean liq-in spike diff: ", mean(s))
 end
@@ -236,10 +243,10 @@ function Base.show(io::IO, ::MIME"text/plain", n::Vector{AbstractNeuron})
     println(io, "Neurons.")
 end
 
-function Base.show(io::IO, ::MIME"text/plain", s::Vector{Synapse})
+function Base.show(io::IO, ::MIME"text/plain", s::Vector{AbstractSynapse})
 	println(io, "Synapses!")
 end
 
-function Base.show(io::IO, ::MIME"text/plain", a::Vector{Astrocyte})
+function Base.show(io::IO, ::MIME"text/plain", a::Vector{AbstractAstrocyte})
 	println(io, "Astrocytes!!")
 end
