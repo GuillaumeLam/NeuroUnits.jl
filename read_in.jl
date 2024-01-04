@@ -1,12 +1,3 @@
-coin(p1=0.5) = rand()<p1 ? 1.0 : 0.0
-
-function factory(p1, n, strength)
-	function u_i_f(t)
-		[coin(p1)*strength for _ in 1:n]
-	end
-	return u_i_f
-end
-
 # function sinusoidal_input_factory(num_neurons::Int, frequency::Float64, simulation_length::Int, amplitude::Float64 = 1.0)
 #     ω = 2 * π * frequency  # Angular frequency
 #     function u_i_f(t)

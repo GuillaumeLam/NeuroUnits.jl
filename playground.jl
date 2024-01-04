@@ -7,7 +7,6 @@ Pkg.activate("./LSM.jl")
 #	- 1. Add input adapter, spiking neurons, ouptut point neuron, & inhib neurons/synapses
 #	- 2. Connect spiking neurons (input from input adapter) with synapses to liquid neurons
 #	- 3. Connect liquid neurons with synapses to readout neurons
-#   - *. Add 3D neuron positioning & 3D synapse proximity positioning
 # 	Practical:
 # 	- 0. Isolate mutable parts from immutable structures (speed up => simpler job for parallelism)
 # 	- 1. Add multi-processing
@@ -15,9 +14,9 @@ Pkg.activate("./LSM.jl")
 include("graphics.jl")
 include("lsm.jl")
 
-@time lsm = LiquidStateMachine()
-@time reservoir_hist = simulate_w_hist!(lsm, u_i_f=lsm.u_i_t_stim)
+@time lsm = LiquidStateMachine(grid_type="cube")
 @time reservoir_hist = simulate_w_hist!(lsm)
+@time reservoir_hist = simulate_w_hist!(lsm, u_i_f=lsm.u_i_t_stim)
 
 @time create_plots(
 	reservoir_hist["neuron_membrane_hist"], 
@@ -26,3 +25,5 @@ include("lsm.jl")
 )
 
 println("DONE!")
+
+reset_hist!(lsm)

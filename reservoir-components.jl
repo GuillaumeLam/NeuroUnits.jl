@@ -1,4 +1,8 @@
+using Distributions
+using DSP
+using Random
 using Statistics
+include("util.jl")
 
 # Define abstract supertypes
 abstract type AbstractNeuron end
@@ -6,62 +10,104 @@ abstract type AbstractSynapse end
 abstract type AbstractAstrocyte end
 
 # Neuron struct
-mutable struct LIFNeuron <: AbstractNeuron
+mutable struct LiquidNeuron <: AbstractNeuron
 	membrane_potential::Float64
 	threshold::Float64
-	reset_potential::Float64
 	spike_τ::Float64
 	out_synapses::Vector{AbstractSynapse}  # Specify the concrete type for clarity
 	in_synapses::Vector{AbstractSynapse}   # Specify the concrete type for clarity
 	last_spike::Float64
 	spike_train::Vector{Int}       # Binary spike train (1 for spike, 0 for no spike)
+	position::Tuple{Float64, Float64, Float64}
 end
 
-function initialize_neurons(num_neurons::Int; simulation_length::Int=100)
-	neurons = Vector{LIFNeuron}()
-	for _ in 1:num_neurons
-		type = rand()<0.8 ? "excitatory" : "inhibitory"
+# function initialize_neurons(num_neurons::Int; simulation_length::Int=100)
+# 	neurons = Vector{LIFNeuron}()
+# 	for _ in 1:num_neurons
+# 		type = rand()<0.8 ? "excitatory" : "inhibitory"
 
-		neuron = LIFNeuron(
-			0.0,  # Rest voltage
-			5.0,  # Example threshold
-			-0.3,  # Rest voltage after spike
-			type == "excitatory" ? 1.7 : -1.7,  # Spike amplitude
-			[],   # No synapses initially
-			[],   # No synapses initially
-			-Inf, # Initialize as if never spiked
-			zeros(Int, simulation_length)  # Binary spike train
-		)
-		push!(neurons, neuron)
-	end
-	return neurons
+# 		neuron = LIFNeuron(
+# 			0.0,  # Rest voltage
+# 			5.0,  # Example threshold
+# 			-0.3,  # Rest voltage after spike
+# 			type == "excitatory" ? 1.7 : -1.7,  # Spike amplitude
+# 			[],   # No synapses initially
+# 			[],   # No synapses initially
+# 			-Inf, # Initialize as if never spiked
+# 			zeros(Int, simulation_length)  # Binary spike train
+# 		)
+# 		push!(neurons, neuron)
+# 	end
+# 	return neurons
+# end
+
+function initialize_neurons_on_grid(grid_positions::Vector{Tuple{Float64, Float64, Float64}}, num_neurons::Int; simulation_length::Int=100)
+    if length(grid_positions) < num_neurons
+        error("Not enough unique grid positions for the number of neurons.")
+    end
+	shuffled_positions = shuffle(grid_positions)
+	neurons = Vector{LiquidNeuron}()
+    for (_, position) in zip(1:num_neurons, shuffled_positions)
+		type = rand()<0.7 ? "excitatory" : "inhibitory"
+        neuron = LiquidNeuron(0.0, 20.0, type == "excitatory" ? 1.0 : -1.0, [], [], -Inf, zeros(Int, simulation_length), position)
+        push!(neurons, neuron)
+    end
+    return neurons
 end
+
+# # Example usage for cubic grid
+# cubic_grid_neurons = initialize_neurons_on_grid(cubic_grid_positions, 1000; simulation_length=1000)
+
+# # Example usage for hexagonal grid
+# hex_grid_neurons = initialize_neurons_on_grid(hex_grid_positions, 1000; simulation_length=1000)
+
+δ(t) = t == 0 ? 1 : 0
+H(t) = t >= 0 ? 1 : 0
+α_u_t(t, τ_u=1.0) = exp(-t / τ_u) * H(t)
 
 # LIF Neuron update function
-function neuron_LIF_update!(neuron::N, current_time::Int, u_i::Float64, Δt::Float64) where {N <: AbstractNeuron}
+function neuron_LIF_update!(neuron::N, current_time::Int, v_i::Float64, Δt::Float64) where {N <: AbstractNeuron}
+	
+	if current_time - neuron.last_spike < 2
+		σ_i = 0.0
+	else
+		σ_i = v_i
+
+		for syn in neuron.in_synapses
+			σ_i += syn.spike_τ
+		end
+	end
+
+	# input_i = v_i
+	# context_i = σ_i
+
+	# println("Input current: ", input_i)
+	# println("Context current: ", context_i)
+	
 	τ_v = 64.0
 	θ_i = neuron.threshold
 	absolute_refractory_period = 2.0  # Absolute refractory period duration in milliseconds
+	b_i = 0.0  # Bias current
+	
+	u_i = σ_i + b_i
 
-    # Check if the neuron is in the refractory period
-    if !(current_time - neuron.last_spike < absolute_refractory_period)
-		# Check for spikes and reset if necessary
-		if neuron.membrane_potential >= θ_i
-			neuron.membrane_potential = neuron.reset_potential
-			neuron.spike_train[current_time] = 1  # Record spike at the current time index
-			neuron.last_spike = current_time
-		else
-			# Update the membrane potential using Euler integration
-			neuron.membrane_potential += (-neuron.membrane_potential + u_i) * (Δt / τ_v)
-		end
+	internal_spike = neuron.membrane_potential>=θ_i ? 1.0 : 0.0
+
+	neuron.membrane_potential += (-neuron.membrane_potential / τ_v + u_i - θ_i * internal_spike) * Δt
+
+	if internal_spike == 1.0
+		neuron.spike_train[current_time] = 1 * neuron.spike_τ
+		neuron.last_spike = current_time
 	end
+
+	neuron.membrane_potential = clamp(neuron.membrane_potential, -4, θ_i+1)
 end
 
 # LIF update function for all neurons
-function neurons_LIF_update!(neurons::Vector{N}, current_time::Int, u_i::Vector{Float64}, Δt::Float64) where {N <: AbstractNeuron}
-	u_i = u_i |> x -> [x; zeros(length(neurons) - length(x))]
+function neurons_LIF_update!(neurons::Vector{N}, current_time::Int, v_i::Vector{Float64}, Δt::Float64) where {N <: AbstractNeuron}
+	padded_v_i = v_i |> x -> [x; zeros(length(neurons) - length(x))]
 	
-	for (neuron, current) in zip(neurons, u_i)
+	for (neuron, current) in zip(neurons, padded_v_i)
 		neuron_LIF_update!(neuron, current_time, current, Δt)
 	end
 end
@@ -81,44 +127,67 @@ mutable struct Synapse <: AbstractSynapse
 	post_neuron::AbstractNeuron          # Use Neuron type for direct access to properties
 	T_pre::Float64               # Pre-synaptic trace
 	T_post::Float64              # Post-synaptic trace
-	delay_const::Float64
-	delay_count::Float64
 	spike_τ::Float64
 	linked_astrocytes::Vector{AbstractAstrocyte}
+	spike_τ_train::Vector{Float64}
 end
 
-# Function to initialize Synapses
-function initialize_synapses(num_synapses::Int, neurons::Vector{N}) where {N <: AbstractNeuron}
-	synapses = Vector{Synapse}()
-	for _ in 1:num_synapses
+# Function to initialize Synapses with distance-based probability
+function initialize_synapses(neurons::Vector{N}; simulation_length::Int=100) where {N <: AbstractNeuron}
+    synapses = Vector{Synapse}()
+    C_values = Dict(
+        "EE" => 0.2,
+        "EI" => 0.1,
+        "II" => 0.3,
+        "IE" => 0.05
+    )
 
-		pre_neuron = rand(neurons)
-		post_neuron = rand(neurons)
+	mu = 3  # mean
+	sigma = 0.25  # standard deviation
+	dist = Normal(mu, sigma)
+	weights = rand(dist, length(neurons))
+	weights = abs.(weights .- mu)
 
-		# type = rand()<8 ? "excitatory" : "inhibitory"
+	weights = shuffle(weights ./ maximum(weights) * 3.0)
+    
+    for pre_neuron in neurons
+        for post_neuron in neurons
+            if pre_neuron !== post_neuron
+                # Determine the type of connection (EE, EI, II, IE)
+                connection_type = (pre_neuron.spike_τ > 0 ? "E" : "I") * (post_neuron.spike_τ > 0 ? "E" : "I")
+                C = C_values[connection_type]
+                distance = euclidean_distance(pre_neuron.position, post_neuron.position)
 
-		synapse = Synapse(
-			rand(0:0.1:3),
-			(0.0,3.0),
-			pre_neuron,
-			post_neuron,
-			0.0,
-			0.0,
-			3.0,
-			0.0,
-			false,
-			[]
-		)
-		push!(synapses, synapse)
-		push!(pre_neuron.out_synapses, synapse)
-		push!(post_neuron.in_synapses, synapse)
-	end
-	return synapses
+                # Check if synapse should be formed based on connection probability
+                if rand() < connection_probability(distance, C)
+                    synapse = Synapse(
+                        rand(weights), #rand(0:0.1:3),  # Initial random weight
+                        (0.0, 3.0),  # Weight cap
+                        pre_neuron,  # Pre-synaptic neuron
+                        post_neuron,  # Post-synaptic neuron
+                        0.0,  # T_pre initial value
+                        0.0,  # T_post initial value
+                        0,  # Spike amplitude
+                        [],  # Linked astrocytes
+						zeros(Float64, simulation_length)
+                    )
+                    push!(synapses, synapse)
+                    push!(pre_neuron.out_synapses, synapse)
+                    push!(post_neuron.in_synapses, synapse)
+                end
+            end
+        end
+    end
+    
+    return synapses
 end
 
 # STDP Synapse update function
 function synapse_STDP_update!(synapse::Synapse, current_time::Int, Δt::Float64)
-	synapse.spike_τ = 0.0
+	if synapse.spike_τ >= 0.0
+		synapse.spike_τ_train = conv(synaptic_filter, synapse.pre_neuron.spike_train)
+		synapse.spike_τ = synapse.weight * synapse.spike_τ_train[current_time]
+	end
 	
 	if synapse.linked_astrocytes != []
 		A_minus = mean([astrocyte.A_astro for astrocyte in synapse.linked_astrocytes])
@@ -133,18 +202,7 @@ function synapse_STDP_update!(synapse::Synapse, current_time::Int, Δt::Float64)
 	a_plus = 0.1
 	a_minus = 0.1
 
-	# Transmit current to post-synaptic neuron
-	if synapse.pre_neuron.spike_train[current_time] == 1
-		synapse.delay_count = synapse.delay_const
-	end
-
-	if synapse.delay_count > 0
-		synapse.delay_count -= 1.0
-		if synapse.delay_count == 0 && !(current_time - synapse.post_neuron.last_spike < 2)
-			synapse.post_neuron.membrane_potential += synapse.weight * synapse.pre_neuron.spike_τ
-			synapse.spike_τ = synapse.weight * synapse.pre_neuron.spike_τ
-		end
-	end
+	pot_Γ = 0.8
 
 	# # Update traces based on the spike train
 	# T_pre_decay = exp(-Δt / τ_plus)
@@ -160,15 +218,15 @@ function synapse_STDP_update!(synapse::Synapse, current_time::Int, Δt::Float64)
 	# STDP weight update based on the last spike times
 	if synapse.pre_neuron.spike_train[current_time] == 1
 		# Potentiation due to pre-synaptic spike
-		synapse.weight += A_plus * synapse.T_pre * Δt
+		synapse.weight += pot_Γ * A_plus * synapse.T_pre * synapse.post_neuron.spike_train[current_time] * Δt
 	end
 	if synapse.post_neuron.spike_train[current_time] == 1
 		# Depression due to post-synaptic spike
-		synapse.weight -= A_minus * synapse.T_post * Δt
+		synapse.weight -= A_minus * synapse.T_post * synapse.pre_neuron.spike_train[current_time] * Δt
 	end
 
 	# Clamp weight within reasonable bounds
-	synapse.weight = clamp(synapse.weight, -3.0, 3.0)
+	synapse.weight = clamp(synapse.weight, synapse.weight_cap[1], synapse.weight_cap[2])
 end
 
 # STDP update function for all synapses
@@ -191,15 +249,15 @@ end
 function initialize_astrocytes(num_astrocytes::Int, liquid_synapses::Vector{S}) where {S <: AbstractSynapse}
 	astrocytes = Vector{Astrocyte}()
 	for _ in 1:num_astrocytes
-		modulated_synapses = rand(liquid_synapses, 100)
+		modulated_synapses = rand(liquid_synapses, 150)
 		# modulated_neurons = liquid_neurons
 
 		astrocyte = Astrocyte(
 			0.15,      	# Initial A_astro value
-			1000.0,     	# τ_astro should be set according to your model specifics
-			7.5e-3,       # w_astro, the weight for the astrocyte's influence
-			0.01,      	# b_astro, bias or base level of astrocyte's activity
-			0.9, 		# Γ_astro, the gain for the astrocyte's influence
+			1.0,     # τ_astro should be set according to your model specifics
+			0.01,     # w_astro, the weight for the astrocyte's influence
+			0.0,      	# b_astro, bias or base level of astrocyte's activity
+			1.0, 		# Γ_astro, the gain for the astrocyte's influence
 			modulated_synapses
 		)
 		push!(astrocytes, astrocyte)
@@ -213,9 +271,12 @@ end
 # Astrocyte LIM model update function
 function astrocyte_LIM_update!(astrocyte::Astrocyte, current_time::Int, u_i::Vector{Float64}, Δt::Float64)
 	# Calculate the total spikes from liquid and input neurons at the current time
-	liquid_spikes = sum(synapse.spike_τ for synapse in astrocyte.liquid_synapses)
+	# liquid_spikes = sum(synapse.pre_neuron.spike_train[current_time] for synapse in astrocyte.liquid_synapses)
+	# input_spikes = sum(u_i)
+
 	input_spikes = sum(u_i)
-	
+	liquid_spikes = sum(abs(synapse.pre_neuron.spike_train[current_time]) for synapse in astrocyte.liquid_synapses)
+
 	# Compute the change in astrocyte activity
 	dA_astro_dt = (-astrocyte.A_astro * astrocyte.Γ_astro + astrocyte.w_astro * (liquid_spikes - input_spikes) + astrocyte.b_astro) / astrocyte.τ_astro
 	
@@ -226,17 +287,17 @@ end
 # LIM update function for all astrocytes
 function astrocytes_LIM_update!(astrocytes::Vector{Astrocyte}, current_time::Int, u_i::Vector{Float64}, Δt::Float64)
 	s = []
-	println("Sum of A_astro before: ", mean([astrocyte.A_astro for astrocyte in astrocytes]))
+	println("Mean of A_astro before: ", mean([astrocyte.A_astro for astrocyte in astrocytes]))
 	for astrocyte in astrocytes
-		liquid_spikes = sum(synapse.spike_τ for synapse in astrocyte.liquid_synapses)
 		input_spikes = sum(u_i)
-		push!(s, liquid_spikes - input_spikes)
+		liquid_spikes = sum(abs(synapse.pre_neuron.spike_train[current_time]) for synapse in astrocyte.liquid_synapses)
+		push!(s, liquid_spikes/input_spikes)
 
 		astrocyte_LIM_update!(astrocyte, current_time, u_i, Δt)
 	end
-	println("Sum of A_astro after: ", mean([astrocyte.A_astro for astrocyte in astrocytes]))
+	println("Mean of A_astro after: ", mean([astrocyte.A_astro for astrocyte in astrocytes]))
 
-	println("Astrocyte activity; mean liq-in spike diff: ", mean(s))
+	println("Astrocyte activity; mean liq-in spike ratio: ", mean(s))
 end
 
 function Base.show(io::IO, ::MIME"text/plain", n::Vector{AbstractNeuron})

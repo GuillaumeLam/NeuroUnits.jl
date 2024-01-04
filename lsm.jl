@@ -1,6 +1,7 @@
 include("reservoir-components.jl")
-include("read_in.jl")
+# include("read_in.jl")
 # include("read_out.jl")
+include("util.jl")
 
 struct LiquidStateMachine
     # spk_neurons::Vector{AbstractNeuron}
@@ -16,22 +17,37 @@ struct LiquidStateMachine
     u_i_t_stim::Function
     u_i_t_rest::Function
 
-    function LiquidStateMachine(;num_spk_neurons::Int=150, num_liq_neurons::Int=1000, num_liq_synapses::Int=2500, num_liq_astrocytes::Int=1500, signal_gain::Float64=7.0)
-        # freq = 10
+    function LiquidStateMachine(;num_spk_neurons::Int=150, num_liq_neurons::Int=1000, grid_type::String="cube", num_liq_astrocytes::Int=1500)
+        if grid_type == "hex-prism"
+            base_hex_grid_positions = generate_hexagonal_prism_grid(3, 6, 1.0)  # Three-layer hex grid
+            grid = tile_hexagonal_prism_grid(base_hex_grid_positions, (6, 6), 1.0)  # 3x3 tiling of the hex grid
+        # elseif grid_type == "tri-prism"
+        #     base_tri_grid_positions = generate_triangular_prism_grid(10, 7, 1.0)  # Three-layer triangle grid
+        #     grid = tile_triangular_prism_grid(base_tri_grid_positions, (7, 7), 1.0)  # 3x3 tiling of the triangle grid
+        elseif grid_type == "cube"
+            grid = generate_cubic_grid((10, 10, 10), 1.0)  # 10x10x10 grid with 1.0 unit spacing
+        # elseif grid_type == "truncated_octahedron"
+        #     grid_size = (3, 3, 3)  # Define the size of the grid
+        #     spacing = 2.0          # Define the spacing between the centers
+        #     grid = generate_truncated_octahedron_grid(grid_size, spacing)
+        else
+            error("Invalid grid type!")
+        end
 
-        u_i_t_stim = factory(0.95, num_spk_neurons, signal_gain)
-        u_i_t_rest = factory(0.05, num_spk_neurons, signal_gain)
+        liq_neurons = initialize_neurons_on_grid(grid, num_liq_neurons)
+        liq_synapses = initialize_synapses(liq_neurons)
+        liq_astrocytes = initialize_astrocytes(num_liq_astrocytes, liq_synapses)
 
         reservoir_hist = Dict(
             "neuron_membrane_hist" => Matrix{Float64}(undef, num_liq_neurons, 0),
-            "synapse_weight_hist" => Matrix{Float64}(undef, num_liq_synapses, 0),
+            "synapse_weight_hist" => Matrix{Float64}(undef, length(liq_synapses), 0),
             "astrocyte_A_hist" => Matrix{Float64}(undef, num_liq_astrocytes, 0),
         )
 
-        # Initialize the neurons, synapses, and astrocytes
-        liq_neurons = initialize_neurons(num_liq_neurons)
-        liq_synapses = initialize_synapses(num_liq_synapses, liq_neurons)
-        liq_astrocytes = initialize_astrocytes(num_liq_astrocytes, liq_synapses)
+        u_i_t_stim = factory(0.95, num_spk_neurons)
+        u_i_t_rest = factory(0.05, num_spk_neurons)
+        # u_i_t_stim = freq_factory(num_spk_neurons, freq=100)
+        # u_i_t_rest = freq_factory(num_spk_neurons, freq=1)
 
         new(
             liq_neurons, 
@@ -42,6 +58,12 @@ struct LiquidStateMachine
             u_i_t_rest
         )
     end
+end
+
+function reset_hist!(lsm::LiquidStateMachine)
+    lsm.reservoir_hist["neuron_membrane_hist"] = Matrix{Float64}(undef, length(lsm.liq_neurons), 0)
+    lsm.reservoir_hist["synapse_weight_hist"] = Matrix{Float64}(undef, length(lsm.liq_synapses), 0)
+    lsm.reservoir_hist["astrocyte_A_hist"] = Matrix{Float64}(undef, length(lsm.liq_astrocytes), 0)
 end
 
 function simulate!(lsm::LiquidStateMachine; u_i_f=nothing, duration::Int=100, Δt::Float64=1.0)
