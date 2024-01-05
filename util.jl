@@ -156,9 +156,6 @@ function alpha_synaptic_filter(t, τ)
     return (t > 0) ? (t / τ) * exp(1 - t / τ) : 0
 end
 
-i = 1:100
-synaptic_filter = [alpha_synaptic_filter(t, 20) for t in i]
-
 ################################
 # STIMULUS GENERATOR FUNCTIONS #
 ################################
@@ -176,7 +173,7 @@ function freq_factory(n, strength::Float64=1.0; freq::Int=10)
     # freq is in hertz; (max:1000, min:1)
 
     function u_i_f(t)
-        if t % floor(1000/freq) == 0
+        if t % ceil(1000/freq) == 0
             return [strength for _ in 1:n]
         else
             return [0.0 for _ in 1:n]

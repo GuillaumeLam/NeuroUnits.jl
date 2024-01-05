@@ -15,13 +15,18 @@ include("graphics.jl")
 include("lsm.jl")
 
 @time lsm = LiquidStateMachine(grid_type="cube")
-@time reservoir_hist = simulate_w_hist!(lsm)
-@time reservoir_hist = simulate_w_hist!(lsm, u_i_f=lsm.u_i_t_stim)
+@time simulate_w_hist!(lsm, u_i_f=lsm.u_i_t_stim)
+@time simulate_w_hist!(lsm)
+
+for _ in 1:3
+	@time simulate_w_hist!(lsm, u_i_f=lsm.u_i_t_stim)
+end
 
 @time create_plots(
-	reservoir_hist["neuron_membrane_hist"], 
-	reservoir_hist["synapse_weight_hist"], 
-	reservoir_hist["astrocyte_A_hist"]
+	"EXP-002-num_spk_neurons=80-max_syn_w=5-5-rest_p=0.1",
+	lsm.reservoir_hist["neuron_membrane_hist"], 
+	lsm.reservoir_hist["synapse_weight_hist"], 
+	lsm.reservoir_hist["astrocyte_A_hist"]
 )
 
 println("DONE!")
