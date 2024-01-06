@@ -10,20 +10,24 @@ Pkg.activate("./LSM.jl")
 # 	Practical:
 # 	- 0. Isolate mutable parts from immutable structures (speed up => simpler job for parallelism)
 # 	- 1. Add multi-processing
+#   - 2. Reduce precision of floating point numbers (speed up)
 
 include("graphics.jl")
 include("lsm.jl")
 
 @time lsm = LiquidStateMachine(grid_type="cube")
-@time simulate_w_hist!(lsm, u_i_f=lsm.u_i_t_stim)
+@time simulate_w_hist!(lsm, spike_train_generator=lsm.stim_spike_train)
 @time simulate_w_hist!(lsm)
 
 for _ in 1:3
-	@time simulate_w_hist!(lsm, u_i_f=lsm.u_i_t_stim)
+	@time simulate_w_hist!(lsm, spike_train_generator=lsm.stim_spike_train)
+end
+for _ in 1:2
+	@time simulate_w_hist!(lsm)
 end
 
 @time create_plots(
-	"EXP-002-num_spk_neurons=80-max_syn_w=5-5-rest_p=0.1",
+	"EXP-005-synaptic_filter_delay-neuron_input=spike_train",
 	lsm.reservoir_hist["neuron_membrane_hist"], 
 	lsm.reservoir_hist["synapse_weight_hist"], 
 	lsm.reservoir_hist["astrocyte_A_hist"]

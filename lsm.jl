@@ -16,12 +16,12 @@ struct LiquidStateMachine
 
     reservoir_hist::Dict{String, Matrix{Float64}}
 
-    u_i_t_stim::Function
-    u_i_t_rest::Function
+    stim_spike_train::Function
+    rest_spike_train::Function
 
     sim_length::Int
 
-    function LiquidStateMachine(;num_spk_neurons::Int=80, num_liq_neurons::Int=1000, grid_type::String="cube", simulation_length::Int=125)
+    function LiquidStateMachine(;num_spk_neurons::Int=200, num_liq_neurons::Int=1000, grid_type::String="cube", simulation_length::Int=125)
         if grid_type == "hex-prism"
             base_hex_grid_positions = generate_hexagonal_prism_grid(3, 6, 1.0)  # Three-layer hex grid
             grid = tile_hexagonal_prism_grid(base_hex_grid_positions, (6, 6), 1.0)  # 3x3 tiling of the hex grid
@@ -40,12 +40,14 @@ struct LiquidStateMachine
 
         liq_neurons = initialize_neurons_on_grid(grid, num_liq_neurons, simulation_length=simulation_length)
         liq_synapses = initialize_synapses(liq_neurons, simulation_length=simulation_length)
-        num_liq_astrocytes=1500
+        
+        num_liq_astrocytes=50
         # determine number of astro based on num of synapses
-        liq_astrocytes = initialize_astrocytes(num_liq_astrocytes, liq_synapses)
 
-        freq = 500
-        astro_t_avg = 10 # too small -> A_astro jumpy; too large -> wrong BF ratio approx
+        liq_astrocytes = initialize_astrocytes(num_liq_astrocytes, liq_neurons)
+
+        freq = 100
+        astro_t_avg = 5 # too small -> A_astro jumpy; too large -> wrong BF ratio approx
 
         reservoir_hist = Dict(
             "neuron_membrane_hist" => Matrix{Float64}(undef, num_liq_neurons, 0),
@@ -53,10 +55,10 @@ struct LiquidStateMachine
             "astrocyte_A_hist" => Matrix{Float64}(undef, num_liq_astrocytes, 0),
         )
 
-        u_i_t_stim = coin_factory(0.95, num_spk_neurons)
-        u_i_t_rest = coin_factory(0.1, num_spk_neurons)
-        # u_i_t_stim = freq_factory(num_spk_neurons, freq=freq)
-        # u_i_t_rest = freq_factory(num_spk_neurons, freq=1)
+        # stim_spike_train = coin_factory(0.95, num_spk_neurons)
+        rest_spike_train = coin_factory(0.1, num_spk_neurons)
+        stim_spike_train = freq_factory(num_spk_neurons, freq=freq)
+        # rest_spike_train = freq_factory(num_spk_neurons, freq=1)
         
 
         new(
@@ -67,8 +69,8 @@ struct LiquidStateMachine
 
             reservoir_hist,
 
-            u_i_t_stim,
-            u_i_t_rest,
+            stim_spike_train,
+            rest_spike_train,
             simulation_length
         )
     end
@@ -80,27 +82,28 @@ function reset_hist!(lsm::LiquidStateMachine)
     lsm.reservoir_hist["astrocyte_A_hist"] = Matrix{Float64}(undef, length(lsm.liq_astrocytes), 0)
 end
 
-function simulate!(lsm::LiquidStateMachine; u_i_f=nothing, Δt::Float64=1.0)
+function simulate!(lsm::LiquidStateMachine; spike_train_generator=nothing, Δt::Float64=1.0)
     time_offset = length(lsm.liq_neurons[1].spike_train)
 
-    for local_time in 1:lsm.sim_length
+	for local_time in 1:lsm.sim_length
         global_time = local_time + time_offset
 
-        if isnothing(u_i_f)
-            u_i_f = lsm.u_i_t_rest
+		println("current_time: ", global_time)
+
+        if isnothing(spike_train_generator)
+            spike_train_generator = lsm.rest_spike_train
         end   
-        u_i = u_i_f(global_time)
-        # when read_in is implemented, u_i_f => u_i will be the stimulus passed to readin
-        
-		neurons_LIF_update!(lsm.liq_neurons, global_time, u_i, Δt)
+        spike_wagon = spike_train_generator(global_time)
+
+		neurons_LIF_update!(lsm.liq_neurons, global_time, spike_wagon, Δt)
 		synapses_STDP_update!(lsm.liq_synapses, global_time, Δt)
-        ts = max(global_time-lsm.astro_t_avg+1, 1):global_time
-        u_i_ts = hcat([u_i_f(t) for t in ts]...)
-        astrocytes_LIM_update!(lsm.liq_astrocytes, global_time, u_i_ts, Δt)
+		ts = max(global_time-lsm.astro_t_avg+1, 1):global_time
+        spike_mini_train = hcat([spike_train_generator(t) for t in ts]...)
+        astrocytes_LIM_update!(lsm.liq_astrocytes, global_time, spike_mini_train, Δt)
 	end
 end
 
-function simulate_w_hist!(lsm::LiquidStateMachine; u_i_f=nothing, Δt::Float64=1.0)
+function simulate_w_hist!(lsm::LiquidStateMachine; spike_train_generator=nothing, Δt::Float64=1.0)
 	neuron_membrane_hist = Matrix{Float64}(undef, length(lsm.liq_neurons), lsm.sim_length)
 	synapse_weight_hist = Matrix{Float64}(undef, length(lsm.liq_synapses), lsm.sim_length)
 	astrocyte_A_hist = Matrix{Float64}(undef, length(lsm.liq_astrocytes), lsm.sim_length)
@@ -112,16 +115,16 @@ function simulate_w_hist!(lsm::LiquidStateMachine; u_i_f=nothing, Δt::Float64=1
 
 		println("current_time: ", global_time)
 
-        if isnothing(u_i_f)
-            u_i_f = lsm.u_i_t_rest
+        if isnothing(spike_train_generator)
+            spike_train_generator = lsm.rest_spike_train
         end   
-        u_i = u_i_f(global_time)
+        spike_wagon = spike_train_generator(global_time)
 
-		neurons_LIF_update!(lsm.liq_neurons, global_time, u_i, Δt)
+		neurons_LIF_update!(lsm.liq_neurons, global_time, spike_wagon, Δt)
 		synapses_STDP_update!(lsm.liq_synapses, global_time, Δt)
 		ts = max(global_time-lsm.astro_t_avg+1, 1):global_time
-        u_i_ts = hcat([u_i_f(t) for t in ts]...)
-        astrocytes_LIM_update!(lsm.liq_astrocytes, global_time, u_i_ts, Δt)
+        spike_mini_train = hcat([spike_train_generator(t) for t in ts]...)
+        astrocytes_LIM_update!(lsm.liq_astrocytes, global_time, spike_mini_train, Δt)
 	
 		# Record neuron membrane potentials
 		for (i, neuron) in enumerate(lsm.liq_neurons)

@@ -156,6 +156,15 @@ function alpha_synaptic_filter(t, τ)
     return (t > 0) ? (t / τ) * exp(1 - t / τ) : 0
 end
 
+# Input Variables
+# t: (ms) strength of signal given t 
+# Context Variables
+# τ: (ms) time of peak synaptic response
+# delay: (ms) delay of synaptic response
+function delayed_synaptic_filter(t, τ, delay)
+    return (t > delay) ? (t - delay) / τ * exp(1 - (t - delay) / τ) : 0.0
+end
+
 ################################
 # STIMULUS GENERATOR FUNCTIONS #
 ################################
@@ -163,21 +172,21 @@ end
 coin(p1=0.5) = rand()<p1 ? 1.0 : 0.0
 
 function coin_factory(p1, n, strength::Float64=1.0)
-	function u_i_f(t)
+	function spike_train_generator(t)
 		[coin(p1)*strength for _ in 1:n]
 	end
-	return u_i_f
+	return spike_train_generator
 end
 
 function freq_factory(n, strength::Float64=1.0; freq::Int=10)
     # freq is in hertz; (max:1000, min:1)
 
-    function u_i_f(t)
+    function spike_train_generator(t)
         if t % ceil(1000/freq) == 0
             return [strength for _ in 1:n]
         else
             return [0.0 for _ in 1:n]
         end
     end
-    return u_i_f
+    return spike_train_generator
 end

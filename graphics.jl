@@ -12,7 +12,7 @@ function create_plots(specific_title, neuron_states, synapse_states, astrocyte_A
         hline!(p1, [20], color=:red, linestyle=:dash)
 
         sorted_synapse_states = sort(synapse_states[:, t])
-        max_syn_w = 7.0
+        max_syn_w = 4.0
 
         p2 = plot(sorted_synapse_states, title = "Ordered Synapse States at t=$(t)(ms)", legend = false, color=:orange, ylims = (-(max_syn_w+0.5), max_syn_w+0.5), xlabel = "Synapse Index", ylabel = "Weight")
         hline!(p2, [max_syn_w], color=:lightblue, linestyle=:dash)
