@@ -49,7 +49,7 @@ function neuron_LIF_update!(neuron::N, current_time::Int, spike_wagon::Float64, 
 	# 		σ_i += syn.spike_τ
 	# 	end
 	# end
-	
+
 	σ_i = 0.0
 
 	for syn in neuron.in_synapses
@@ -140,7 +140,7 @@ function initialize_synapses(neurons::Vector{N}; simulation_length::Int=100) whe
 				# Check if synapse should be formed based on connection probability
 				if rand() < connection_probability(distance, C)
 					synapse = Synapse(
-						rand(0:0.1:max_syn_w), # rand(weights),  # Initial random weight
+						rand(weights), # rand(0:0.1:max_syn_w),  # Initial random weight
 						(0.0, max_syn_w),  # Weight cap
 						pre_neuron,  # Pre-synaptic neuron
 						post_neuron,  # Post-synaptic neuron
@@ -276,7 +276,7 @@ function astrocytes_LIM_update!(astrocytes::Vector{Astrocyte}, current_time::Int
 	println("Mean of A_astro before: ", mean([astrocyte.A_astro for astrocyte in astrocytes]))
 	for astrocyte in astrocytes
 		# momentary approximation of input & liquid spikes
-		input_spikes = sum(input_spike_trains)/size(input_spike_trains)[2]
+		input_spikes = sum(input_spike_trains)
 		liquid_spikes = sum(hcat([abs.(n.spike_train[max(current_time-astrocyte.astro_liq_t+1, 1):current_time]) for n in astrocyte.liquid_neurons]...))[1]/astrocyte.astro_liq_t
 		push!(s_i, input_spikes)
 		push!(s_l, liquid_spikes)

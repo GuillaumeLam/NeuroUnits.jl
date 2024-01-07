@@ -21,7 +21,7 @@ struct LiquidStateMachine
 
     sim_length::Int
 
-    function LiquidStateMachine(;num_spk_neurons::Int=200, num_liq_neurons::Int=1000, grid_type::String="cube", simulation_length::Int=125)
+    function LiquidStateMachine(;num_spk_neurons::Int=50, num_liq_neurons::Int=1000, grid_type::String="cube", simulation_length::Int=125)
         if grid_type == "hex-prism"
             base_hex_grid_positions = generate_hexagonal_prism_grid(3, 6, 1.0)  # Three-layer hex grid
             grid = tile_hexagonal_prism_grid(base_hex_grid_positions, (6, 6), 1.0)  # 3x3 tiling of the hex grid
@@ -46,8 +46,12 @@ struct LiquidStateMachine
 
         liq_astrocytes = initialize_astrocytes(num_liq_astrocytes, liq_neurons)
 
-        freq = 100
-        astro_t_avg = 5 # too small -> A_astro jumpy; too large -> wrong BF ratio approx
+        # For freq stim
+        # freq = 100 # Hz => 
+        # astro_t_avg = 10 # ms => too small -> A_astro jumpy; too large -> wrong BF ratio approx
+
+        # For prob stim
+        astro_t_avg = 1
 
         reservoir_hist = Dict(
             "neuron_membrane_hist" => Matrix{Float64}(undef, num_liq_neurons, 0),
@@ -55,9 +59,9 @@ struct LiquidStateMachine
             "astrocyte_A_hist" => Matrix{Float64}(undef, num_liq_astrocytes, 0),
         )
 
-        # stim_spike_train = coin_factory(0.95, num_spk_neurons)
+        stim_spike_train = coin_factory(0.55, num_spk_neurons)
         rest_spike_train = coin_factory(0.1, num_spk_neurons)
-        stim_spike_train = freq_factory(num_spk_neurons, freq=freq)
+        # stim_spike_train = freq_factory(num_spk_neurons, freq=freq)
         # rest_spike_train = freq_factory(num_spk_neurons, freq=1)
         
 
