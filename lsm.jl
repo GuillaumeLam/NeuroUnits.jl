@@ -51,7 +51,7 @@ struct LiquidStateMachine
         # astro_t_avg = 10 # ms => too small -> A_astro jumpy; too large -> wrong BF ratio approx
 
         # For prob stim
-        astro_t_avg = 1
+        astro_t_avg = 10 # ms => too small -> A_astro jumpy; too large -> wrong BF ratio approx
 
         reservoir_hist = Dict(
             "neuron_membrane_hist" => Matrix{Float64}(undef, num_liq_neurons, 0),
@@ -59,7 +59,7 @@ struct LiquidStateMachine
             "astrocyte_A_hist" => Matrix{Float64}(undef, num_liq_astrocytes, 0),
         )
 
-        stim_spike_train = coin_factory(0.55, num_spk_neurons)
+        stim_spike_train = coin_factory(0.00022, num_spk_neurons)
         rest_spike_train = coin_factory(0.1, num_spk_neurons)
         # stim_spike_train = freq_factory(num_spk_neurons, freq=freq)
         # rest_spike_train = freq_factory(num_spk_neurons, freq=1)

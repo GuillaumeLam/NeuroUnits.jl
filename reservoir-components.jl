@@ -226,7 +226,7 @@ mutable struct Astrocyte <: AbstractAstrocyte
 	liquid_neurons::Vector{AbstractNeuron}
 	astro_liq_t::Int
 end
-function initialize_astrocytes(num_astrocytes::Int, liquid_neurons::Vector{S}; astro_liq_t::Int=4) where {S <: AbstractNeuron}
+function initialize_astrocytes(num_astrocytes::Int, liquid_neurons::Vector{S}; astro_liq_t::Int=1) where {S <: AbstractNeuron}
 	astrocytes = Vector{Astrocyte}()
 	for _ in 1:num_astrocytes
 		modulated_neurons = unique(rand(liquid_neurons, 750))
